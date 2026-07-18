@@ -271,6 +271,39 @@ else
   grn "fixup: qspa.modem bootconfig already handled (skip)"
 fi
 
+# 13b) TELEPHONY — Option B: PERMANENT de-gate that makes vendor_boot IRRELEVANT. Strip the QSPA
+#      `<overlay ... requiredSystemPropertyName="ro.boot.vendor.qspa.modem" .../>` block from the 5
+#      telephony manifests so the packages ALWAYS install, with ZERO dependency on any boot param.
+#      This is the real fix for the "OrangeFox auto-reflashes vendor_boot after install -> wipes the
+#      patched cmdline -> telephony breaks" trap (community expects vendor_boot not to matter, like
+#      the Lineage-based RS4 ROMs). All 5 are PRIMARY packages (real <application>); the self-overlay
+#      is purely AOSPA's QSPA gate hack, so removing it returns them to normal always-present
+#      packages. Settings/TelephonyUtils.java reads the prop only for minor UI (takes the non-QSPA
+#      path when unset = correct for MediaTek). Manifest edit -> rebuilds only those APKs, NO soong
+#      re-analysis. Idempotent (guarded on the qspa string). See PORT-NOTES.md + JOURNAL.
+#      TRANSITION NOTE: step 13 (the bootconfig param) is KEPT this build as a belt-and-suspenders
+#      safety net. VERIFY telephony works on a STRIPPED/stock vendor_boot (no param) to prove
+#      vendor_boot no longer matters, THEN next build: remove step 13, deprecate
+#      patch-vendorboot-qspa.py, simplify the README recovery section.
+for qm in \
+  "packages/providers/TelephonyProvider/AndroidManifest.xml" \
+  "packages/services/Mms/AndroidManifest.xml" \
+  "packages/apps/Stk/AndroidManifest.xml" \
+  "packages/apps/ImsServiceEntitlement/AndroidManifest.xml" \
+  "packages/services/AlternativeNetworkAccess/AndroidManifest.xml"; do
+  qf="$TOP/$qm"
+  if [ -f "$qf" ] && grep -q 'ro.boot.vendor.qspa.modem' "$qf"; then
+    perl -0777 -pi -e 's{\n?[ \t]*<overlay\b[^>]*ro\.boot\.vendor\.qspa\.modem[^>]*/>}{}g' "$qf"
+    if grep -q 'ro.boot.vendor.qspa.modem' "$qf"; then
+      red "ERROR: QSPA gate NOT stripped from $qm — inspect the manifest form manually"
+    else
+      grn "fixup: stripped QSPA overlay gate from $qm (telephony no longer needs vendor_boot param)"
+    fi
+  else
+    grn "fixup: QSPA gate already stripped from $qm (skip)"
+  fi
+done
+
 # 14) SENSORS: /vendor/etc/sensors/hals.conf (from device configs) lists
 #     android.hardware.sensors@2.0-subhal-impl-1.0.so + sensors.dynamic_sensor_hal.so — NEITHER
 #     exists in the AOSPA tree (the first is a Lineage hardware/mediatek module absent from the

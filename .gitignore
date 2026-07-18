@@ -1,0 +1,30 @@
+# Stock firmware dump — 5.8 GB, proprietary Transsion/itel firmware. Not redistributable, too big
+# for git. Keep it locally; document where to obtain it (see README / JOURNAL).
+itel-RS4-S666LN-28.zip
+*.stockfw.zip
+
+# Build outputs / logs (the source tree lives at /mnt/external_nvme/aospa, not here, but guard anyway)
+out/
+*.log
+
+# Editor / OS cruft
+*.swp
+*~
+.DS_Store
+
+# Proprietary fenrir-signed LK — not redistributed in this repo. Obtain from the device
+# community (PenumbraGUI). Kept locally, gitignored.
+s666ln-fenrir-signed.bin
+
+# Proprietary 32-bit MediaTek GPU blobs (Mali GLES/Vulkan/gralloc) harvested from the stock
+# firmware vendor image. Not redistributable; apply-overlays.sh step 21 documents how to
+# regenerate them from itel-RS4-S666LN-28.zip. Kept locally, gitignored.
+blobs32/
+
+# Third-party OrangeFox recovery image (not ours). Obtain from the device community; patch its
+# vendor_boot cmdline with patch-vendorboot-qspa.py before flashing. Kept locally, gitignored.
+ofox.img
+
+# Personal lab journal and release announcement — kept local, not part of the public recipe.
+JOURNAL.md
+TELEGRAM-POST.md

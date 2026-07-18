@@ -1,0 +1,22 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// Defines `generated_kernel_headers`, the soong module that exposes the kernel UAPI
+// headers to userspace modules. On a from-source kernel build soong auto-generates this
+// from the kernel's `make headers_install`; this ROM ships a PREBUILT GKI kernel
+// (device/millennium/common-kernel/Image.gz), so no such build runs and the module would
+// otherwise be undefined. hardware/mediatek/packages/PowerOffAlarm's libjni_poweroffalarm
+// header_libs on it, so soong analysis fails ("undefined module generated_kernel_headers").
+//
+// The prebuilt headers_install output is already present at kernel-headers/usr/include
+// (912 UAPI headers: linux/, asm/ (arm64), asm-generic/, drm/, ...). Export it. UAPI is
+// stable across 5.10 sublevels, so these headers (5.10.198-derived) are valid for the
+// 5.10.260 custom kernel we ship. Landed by apply-overlays.sh (survives repo sync).
+cc_library_headers {
+    name: "generated_kernel_headers",
+    host_supported: true,
+    vendor_available: true,
+    recovery_available: true,
+    ramdisk_available: true,
+    vendor_ramdisk_available: true,
+    export_include_dirs: ["kernel-headers/usr/include"],
+}

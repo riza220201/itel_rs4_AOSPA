@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  itel RS4 (S666LN, MT6789/Helio G99) local manifest for AOSPA beryl (Android 16).
+  Modeled on KimelaZX/local_manifests (lineage-23.2 + afterlife-16.2 branches).
+  Copy to <src>/.repo/local_manifests/S666LN.xml after `repo init`.
+
+  Differences from the KimelaZX original:
+  - dropped <remove-project packages/apps/Aperture> (Lineage ships Aperture, AOSP/AOSPA
+    does not - removing a non-existent project makes repo sync fail); plain add instead.
+  - dropped vendor/lineage-priv/keys (KimelaZX's private signing keys - not ours).
+
+  QPR fallback matrix (if AOSPA beryl turns out pre-QPR2 and the QPR2-aligned set
+  breaks): sepolicy_vndr sixteen-qpr2-rebase -> sixteen; ims sixteen-oem -> sixteen;
+  MCK sixteen-q2 -> sixteen; device tree lineage-23.2 -> lineage-23.0/23.1.
+-->
+<manifest>
+  <remote name="KimelaZX" fetch="https://github.com/KimelaZX" clone-depth="1" />
+  <remote name="MillenniumOSS" fetch="https://github.com/MillenniumOSS" clone-depth="1" />
+
+  <!-- AOSPA's default manifest syncs proprietary_vendor_qcom_common (vendor/qcom/common), a
+       QCOM-only blobs repo. Its auto-generated soong_namespace Android.bp files import
+       hardware/qcom/display{,/gralloc,/libdebug} — QCOM namespaces we never sync on a MediaTek
+       device — so `soong bootstrap` fails ("namespace ... does not exist"). Nothing in our
+       device/vendor/hardware trees references it (the QTI telephony packages come from
+       vendor/codeaurora + vendor/qcom/opensource, not here). Drop it entirely. -->
+  <remove-project name="proprietary_vendor_qcom_common" />
+
+  <!-- QCOM IP-accelerator (IPA) data-path repos (data-ipa-cfg-mgr + its -legacy path, same repo
+       name). Their libipanat sits in its OWN soong namespace that imports only "." and header_libs
+       on qti_kernel_headers (which lives in the hardware/google/pixel/kernel_headers namespace) —
+       namespace visibility isn't transitive, so soong bootstrap fails. QCOM-only data hardware,
+       no MediaTek use. Removing by name drops both path entries. -->
+  <remove-project name="AOSPA/android_vendor_qcom_opensource_data-ipa-cfg-mgr" />
+
+  <!-- Device tree (base branch; AOSPA adaptation applied on top by apply-aospa-adaptation.sh) -->
+  <project path="device/itel/S666LN" name="device_itel_S666LN" remote="KimelaZX" revision="lineage-23.2" />
+
+  <!-- Device kernel bits: prebuilt dtb/dtbo.img + first-stage ramdisk + vendor_dlkm modules -->
+  <project path="device/itel/S666LN-kernel" name="device_itel_S666LN-kernel" remote="KimelaZX" revision="sixteen" />
+
+  <!-- Millennium Common Kernel: prebuilt GKI Image.gz + kernel-headers (BoardConfig COMMON_GKI_PATH) -->
+  <project path="device/millennium/common-kernel" name="android_device_millennium_common-kernel" remote="KimelaZX" revision="sixteen-q2" />
+
+  <!-- Vendor blobs (~2 GB) -->
+  <project path="vendor/itel/S666LN" name="vendor_itel_S666LN" remote="KimelaZX" revision="lineage-23.2" />
+
+  <!-- JamesDSP audio -->
+  <project path="vendor/JamesDSP" name="android_vendor_JamesDSP" remote="MillenniumOSS" revision="sixteen" />
+
+  <!-- MTK device support stack -->
+  <project path="hardware/mediatek" name="android_hardware_mediatek" remote="MillenniumOSS" revision="sixteen" />
+  <project path="hardware/millennium" name="android_hardware_millennium" remote="MillenniumOSS" revision="sixteen" />
+  <project path="device/mediatek/sepolicy_vndr" name="android_device_mediatek_sepolicy_vndr" remote="MillenniumOSS" revision="sixteen-qpr2-rebase" />
+  <project path="vendor/mediatek/ims" name="android_vendor_mediatek_ims" remote="MillenniumOSS" revision="sixteen-oem" />
+
+  <!-- Google Pixel HAL support (libperfmgr power/thermal, pixelatoms, etc.). hardware/mediatek's
+       Android.bp declares a soong_namespace importing "hardware/google/pixel"; the device's power
+       HAL is libperfmgr-based. LineageOS ships it in its base manifest, but AOSPA does not, so
+       soong bootstrap fails ("namespace hardware/google/pixel does not exist"). Pull the LineageOS
+       fork @ lineage-23.0 (same branch as our other LineageOS repos; imports hardware/google/
+       interfaces, which AOSP already provides). -->
+  <project path="hardware/google/pixel" name="LineageOS/android_hardware_google_pixel" remote="github" revision="lineage-23.0" clone-depth="1" />
+
+  <!-- LineageOS shared sepolicy: device/mediatek/sepolicy_vndr/SEPolicy.mk includes
+       device/lineage/sepolicy/libperfmgr/sepolicy.mk (libperfmgr power-HAL sepolicy). AOSPA
+       does not ship device/lineage/sepolicy; pull it from LineageOS at lineage-23.0 (the same
+       branch AOSPA beryl uses for its other LineageOS repos, e.g. Aperture). Only the libperfmgr
+       subdir is wired into BOARD_VENDOR_SEPOLICY_DIRS; the rest of the repo sits unused. -->
+  <project path="device/lineage/sepolicy" name="LineageOS/android_device_lineage_sepolicy" remote="github" revision="lineage-23.0" clone-depth="1" />
+
+  <!-- Camera: AOSPA beryl already ships packages/apps/Aperture (LineageOS Aperture @ lineage-23.0),
+       which is exactly what the device tree's ApertureOverlay RRO targets. Use AOSPA's; do NOT
+       re-declare it here (duplicate path breaks repo sync). The device product just needs to
+       pull it into PRODUCT_PACKAGES (done in aospa_S666LN.mk). -->
+</manifest>

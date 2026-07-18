@@ -167,3 +167,33 @@ or fail.** All three "broken subsystem" bugs were exactly this (none were MediaT
 background-only). Interactive HW verification pending post-reflash: call/data, WiFi join, GPS lock,
 BT pair, camera capture, fingerprint enroll (TEE was a one-shot crash; keymint/Widevine verified
 working), PE/PD fast charge with a wall charger.
+
+## 🔐 Play Integrity / build fingerprint (bug report 2026-07-18 — fix staged for next build)
+
+**Symptom:** integrity checkers report the device **fingerprint is invalid** → device only reaches
+BASIC (fails DEVICE), and STRONG is out of reach.
+
+**Root cause:** the device tree overrides the PER-PARTITION fingerprints to the stock certified
+value via `PRODUCT_BUILD_PROP_OVERRIDES += BuildFingerprint=...`
+(`ro.system/vendor/product/odm/...build.fingerprint` = `Itel/S666LN-OP/itel-S666LN:13/
+TP1A.220624.014/251212V1661:user/release-keys`). BUT the **primary `ro.build.fingerprint`** — the
+one `Build.FINGERPRINT` and Play Integrity actually read — is **not written to any build.prop**, so
+`init` derives it at runtime (`property_derive_build_fingerprint`, only when unset) from the live
+props: `brand/name/device : version.release / build.id / version.incremental : type / tags`. Those
+are the real AOSPA A16 values, so it derives an invalid `Itel/S666LN-OP/S666LN:16/BQ2A…:
+userdebug/test-keys`.
+
+**Fix (staged in `device-aospa/aospa_S666LN.mk`, VERIFY on next build):** set `ro.build.fingerprint`
+explicitly via `PRODUCT_SYSTEM_PROPERTIES` to the stock string → init skips the derive.
+Check after building: `adb shell getprop ro.build.fingerprint` must equal the stock value, and an
+integrity checker should then show a VALID fingerprint.
+
+**Expectation setting (important, tell users):**
+- This fix targets **BASIC → DEVICE** integrity (valid certified fingerprint + fenrir green boot).
+- **STRONG is NOT obtainable from a fingerprint fix.** STRONG requires hardware-backed key
+  attestation with a keybox Google trusts (TEE/RKP). On an unlocked-bootloader custom ROM that means
+  a valid spoofed keybox via a root module (e.g. TrickyStore) — which needs KernelSU/Magisk (the
+  ksunext kernel variant exists but this build ships rootless vanilla). So: fingerprint fix ⇒ DEVICE;
+  STRONG needs the root+keybox route and is a separate, optional decision.
+- For a proper release, also consider building the **user** variant + **release-key** signing so
+  `ro.build.type`/`ro.build.tags` stop reading `userdebug`/`test-keys` (some checkers flag those too).

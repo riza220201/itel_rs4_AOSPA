@@ -50,6 +50,16 @@ PRODUCT_BUILD_PROP_OVERRIDES += \
     DeviceName=$(PRODUCT_SYSTEM_DEVICE) \
     DeviceProduct=$(PRODUCT_SYSTEM_NAME)
 
+# Play Integrity / fingerprint validity (2026-07-18): the BuildFingerprint override above only sets
+# the PER-PARTITION fingerprints (ro.system/vendor/product.build.fingerprint). The PRIMARY
+# ro.build.fingerprint — the one Build.FINGERPRINT and Play Integrity read — is not written to
+# build.prop, so init derives it at runtime from the live props (brand/name/device : release / id /
+# incremental : type / tags) → an invalid "…:16/BQ2A…:userdebug/test-keys" string. Set it
+# explicitly to the stock certified value so init skips the derive (it only derives when unset).
+# VERIFY on the next build: `adb shell getprop ro.build.fingerprint` must equal the stock string.
+PRODUCT_SYSTEM_PROPERTIES += \
+    ro.build.fingerprint=Itel/S666LN-OP/itel-S666LN:13/TP1A.220624.014/251212V1661:user/release-keys
+
 # Bootanimation resolution (720 x 1612 panel)
 TARGET_BOOT_ANIMATION_RES := 720
 

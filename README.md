@@ -25,8 +25,9 @@ AOSPA and fix every breakage encountered from `lunch` through packaging. A full 
 **Not in this repo:**
 - **`s666ln-fenrir-signed.bin`** — the **mandatory** "fenrir" signed LK (suppresses bootloader
   orange-state; flash to `lk_a`/`lk_b`). It's a proprietary signed bootloader and is **not
-  redistributed here** — obtain it from the device community (PenumbraGUI). Note: it's already the
-  `lk` partition inside the released OTA zip (`radio/lk.img`), so an OTA install applies it anyway.
+  redistributed here** — obtain it from the device community: the **@itelRS4Updates** Telegram
+  channel. Note: it's already the `lk` partition inside the released OTA zip (`radio/lk.img`), so an
+  OTA install applies it anyway.
 - `itel-RS4-S666LN-28.zip` — 5.8 GB stock firmware (blob/scatter reference; also the source of the
   32-bit MediaTek GPU blobs `apply-overlays.sh` step 21 stages — see that step to regenerate them).
 The Android source tree and `out/` live at `/mnt/external_nvme/aospa`, not here.

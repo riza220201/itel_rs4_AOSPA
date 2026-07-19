@@ -25,6 +25,12 @@ blobs32/
 # vendor_boot cmdline with patch-vendorboot-qspa.py before flashing. Kept locally, gitignored.
 ofox.img
 
+# Private release signing keys (releasekey/platform/shared/media/… .pk8 + .x509.pem). These sign
+# platform-privileged code — NEVER commit or redistribute. Whoever holds them can sign an update or
+# app that runs with system/platform permissions. Regenerate with development/tools/make_key if lost
+# (a lost key = no more OTAs to already-flashed devices; a leaked key = compromised signing).
+keys-priv/
+
 # Personal lab journal and release announcement — kept local, not part of the public recipe.
 JOURNAL.md
 TELEGRAM-POST.md

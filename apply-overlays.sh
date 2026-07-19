@@ -516,3 +516,27 @@ if [ -d "$SELF_DIR/blobs32" ]; then
 else
   red "WARN: $SELF_DIR/blobs32 missing — 32-bit GPU blobs NOT staged"
 fi
+
+# 22) RELEASE SIGNING KEYS (2026-07-19, RC): stage our private release keys into the source tree so
+#     aospa_S666LN.mk's `PRODUCT_DEFAULT_DEV_CERTIFICATE := vendor/aospa-priv/keys/releasekey`
+#     resolves. Keys (releasekey/platform/shared/media/networkstack/nfc/bluetooth/sdk_sandbox/
+#     cts_uicc_2021 + testkey, no-password RSA-2048) live in $SELF_DIR/keys-priv (gitignored, survives
+#     re-sync). testkey == a copy of releasekey: system/sepolicy/private/keys.conf's [@RELEASE] tag
+#     hardcodes $DEFAULT_SYSTEM_DEV_CERTIFICATE_dir/testkey.x509.pem, so the mac_permissions seinfo for
+#     default-signed apps must equal our default cert. Missing testkey => "needed by
+#     product_mac_permissions.xml, missing and no known rule to make it" (the rc3 build failure).
+#     Keys are generated with development/tools/make_key. vendor/aospa-priv is NOT a manifest project,
+#     so repo sync never touches it, but stage every run for robustness. Setting the default cert to a
+#     non-testkey signs all APKs/APEX containers with our key and takes ro.build.tags OFF test-keys ->
+#     dev-keys (verified on the rc7 build; the release-keys tag needs the formal sign_target_files_apks
+#     re-sign flow, not in-tree signing — dev-keys still passes the "not test-keys" fraud/banking check).
+#     See JOURNAL 2026-07-19 + PORT-NOTES "Release signing".
+KEYDST="$TOP/vendor/aospa-priv/keys"
+if [ -d "$SELF_DIR/keys-priv" ] && ls "$SELF_DIR/keys-priv"/releasekey.pk8 >/dev/null 2>&1; then
+  mkdir -p "$KEYDST"
+  cp -f "$SELF_DIR/keys-priv/"*.pk8 "$SELF_DIR/keys-priv/"*.x509.pem "$KEYDST/"
+  chmod 600 "$KEYDST/"*.pk8
+  grn "fixup: release signing keys staged into vendor/aospa-priv/keys ($(ls "$KEYDST"/*.pk8 | wc -l) keys)"
+else
+  red "WARN: $SELF_DIR/keys-priv/releasekey.pk8 missing — release keys NOT staged (build would fall back to testkey)"
+fi

@@ -23,6 +23,22 @@ TARGET_BOARD_PLATFORM := mt6789
 # local manifest instead — importing can't fix a namespace that exists nowhere.)
 PRODUCT_SOONG_NAMESPACES += hardware/google/pixel/kernel_headers
 
+# ── Release signing (2026-07-19, RC) ──────────────────────────────────────────────────────
+# Point the default dev certificate at our own release keys instead of the public AOSP testkey.
+# Two effects, both wanted for a distributable build:
+#   1. Every APK + APEX container is signed with OUR key (not the world-readable AOSP test-keys —
+#      whoever holds those can sign a platform-privileged app/update, a real risk for a public ROM).
+#   2. build/make/core/config.mk: DEFAULT_SYSTEM_DEV_CERTIFICATE != .../security/testkey ⇒ the build
+#      is stamped BUILD_KEYS=release ⇒ ro.build.tags=release-keys. Combined with `lunch …-user`
+#      (ro.build.type=user, ro.debuggable=0) the REAL props finally match the spoofed
+#      BuildFingerprint/BuildDesc above (…:user/release-keys) — the clean RC the journal called for.
+# Keys are no-password RSA-2048 (required for non-interactive signapk during `m`), generated with
+# development/tools/make_key, kept private in ~/itel_rs4_AOSPA/keys-priv/ (gitignored) and staged
+# into vendor/aospa-priv/keys/ by apply-overlays.sh. AVB/verified-boot keys are deliberately NOT
+# changed here — the device boots green under the fenrir LK with the stock AVB chain, and Play
+# Integrity certification depends on that green state; only APK/OTA signing changes.
+PRODUCT_DEFAULT_DEV_CERTIFICATE := vendor/aospa-priv/keys/releasekey
+
 # Inherit from those products. Most specific first.
 $(call inherit-product, $(SRC_TARGET_DIR)/product/core_64_bit_only.mk)
 $(call inherit-product, $(SRC_TARGET_DIR)/product/full_base_telephony.mk)

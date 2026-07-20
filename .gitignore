@@ -45,3 +45,6 @@ Itel_RS4_RAW_v2.zip
 
 # Session handoff / next-project plan — kept local like the journal, not part of the public recipe.
 RESUME-THIS.md
+
+# USB-gadget flap logcat evidence for the v4 bug (local reference).
+usb-flap-evidence.log

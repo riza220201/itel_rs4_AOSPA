@@ -34,3 +34,14 @@ keys-priv/
 # Personal lab journal and release announcement — kept local, not part of the public recipe.
 JOURNAL.md
 TELEGRAM-POST.md
+
+# Patched proprietary MediaTek camera-HAL blobs that enable RAW/DNG (from the community
+# Itel_RS4_RAW_v2 module). Not redistributable; PORT-NOTES.md "Camera RAW / DNG without root"
+# documents how to obtain them. Kept locally, gitignored.
+blobs-camera-raw/
+
+# Source Magisk module the camera RAW blobs are extracted from (proprietary payload).
+Itel_RS4_RAW_v2.zip
+
+# Session handoff / next-project plan — kept local like the journal, not part of the public recipe.
+RESUME-THIS.md

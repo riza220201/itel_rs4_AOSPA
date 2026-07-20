@@ -540,3 +540,198 @@ if [ -d "$SELF_DIR/keys-priv" ] && ls "$SELF_DIR/keys-priv"/releasekey.pk8 >/dev
 else
   red "WARN: $SELF_DIR/keys-priv/releasekey.pk8 missing — release keys NOT staged (build would fall back to testkey)"
 fi
+
+# 23) CAMERA RAW/DNG (2026-07-20): make the MTK camera HAL advertise RAW capability so Camera2 apps
+#     can shoot DNG. The device supports it, but the stock blobs don't expose it — the community
+#     workaround is the Itel_RS4_RAW_v2 Magisk module, which overlays two camera-HAL libs at
+#     /vendor/lib64/. Staging them into the vendor tree gives every user the same result with NO ROOT,
+#     and puts them at /vendor/lib64/mt6789/ (the canonical path these libs load from; the Magisk
+#     module's /vendor/lib64/ copies only worked by shadowing the search path).
+#     Drop-in safety was verified before staging: identical SONAME, identical DT_NEEDED (16 and 35
+#     entries) and identical 706-symbol dynamic export sets vs stock => soong check_elf_file passes
+#     with the existing Android.bp modules unchanged. libmtkcam_3rdparty.customer.so is the SAME
+#     binary (same build ID) with a 10-byte .text patch (one b.ne -> NOP plus two immediates);
+#     libmtkcam_metastore.so is a different build of the same source (identical sensor-metadata set).
+#     Aperture already implements DNG capture (ImageCapture.OUTPUT_FORMAT_RAW), so the RAW toggle
+#     appears in the camera app once the HAL advertises the capability — no app change needed.
+#     Blob-only change => kati/packaging re-run, NO soong re-analysis.
+#     See blobs-camera-raw/README.md + PORT-NOTES.md + JOURNAL 2026-07-20.
+RAWSRC="$SELF_DIR/blobs-camera-raw"
+RAWDST="$TOP/vendor/itel/S666LN/proprietary/vendor/lib64/mt6789"
+if [ -d "$RAWSRC" ] && [ -d "$RAWDST" ]; then
+  raw_n=0
+  for so in libmtkcam_3rdparty.customer.so libmtkcam_metastore.so; do
+    if [ ! -f "$RAWSRC/$so" ]; then
+      red "WARN: $RAWSRC/$so missing — camera RAW blob NOT staged"
+      continue
+    fi
+    # Back up the stock blob once, before the first overwrite (never re-take it: after step 23 has
+    # run, the tree copy IS the patched one and a re-backup would destroy the stock reference).
+    [ -f "$RAWDST/$so.stock" ] || cp -f "$RAWDST/$so" "$RAWDST/$so.stock"
+    cp -f "$RAWSRC/$so" "$RAWDST/$so"
+    raw_n=$((raw_n+1))
+  done
+  if [ "$raw_n" -eq 2 ]; then
+    grn "fixup: camera RAW/DNG blobs staged into vendor tree (2 libs, stock kept as *.so.stock)"
+  else
+    red "ERROR: camera RAW staging incomplete ($raw_n/2 libs)"
+  fi
+else
+  red "WARN: $RAWSRC or $RAWDST missing — camera RAW/DNG blobs NOT staged"
+fi
+
+# 24) GMS SAFETYCENTER FORCE-CLOSE (2026-07-20): the one bug advertised as "known issue" in the v2
+#     release notes. `com.google.android.gms` FCs with
+#     `IllegalArgumentException: Unexpected safety source: AdvancedProtection`.
+#     ROOT CAUSE: this build ships the AOSP mainline Permission module (com.android.permission),
+#     whose SafetyCenter config declares only AOSP safety sources. GMS ships Google's variant of that
+#     module, whose config additionally declares the Android-16 "Advanced Protection" source. GMS
+#     calls SafetyCenterManager.setSafetySourceData("AdvancedProtection", ...); SafetySourceDataValidator
+#     .validateRequest() looks the id up in the config, gets null, and throws (SafetySourceDataValidator
+#     .java:85) -> GMS crashes. Nothing on the device is actually broken, but it FCs on every boot.
+#     FIX: declare the source so the call is accepted. Deliberately MINIMAL — a hidden dynamic source
+#     with no strings and no intent:
+#       * initialDisplayState="hidden" => per SafetySource.Builder.build(), title/summary/intentAction
+#         are all NOT required (titleRequired = isDynamicNotHidden || isDynamicHiddenWithSearch ||
+#         isStatic — all false here), so NO new string resources are needed and the UI is unchanged.
+#       * when GMS does push data, SafetySourceStatus.Builder requires non-null title+summary, so the
+#         rendered entry takes its text from GMS, not from the config.
+#       * maxSeverityLevel is omitted => defaults to Integer.MAX_VALUE, so GMS cannot trip the
+#         "exceeds max severity" throw either.
+#       * placed in AndroidAdvancedSources, which is STATEFUL (no statelessIconType) — a stateless
+#         group would throw if GMS reported any severity above UNSPECIFIED.
+#       * profile="all_profiles" is the permissive choice: primary_profile_only would throw
+#         "Unexpected profile type" if GMS ever pushed for a work/private profile.
+#     Modifies an existing resource file (no new file in a glob) => ninja-incremental rebuild of the
+#     com.android.permission APEX, NO ~1 h soong re-analysis. See PORT-NOTES.md + JOURNAL 2026-07-20.
+SCCFG_N=0
+for SCCFG in "$TOP"/packages/modules/Permission/SafetyCenter/Resources/res/raw*/safety_center_config.xml; do
+  [ -f "$SCCFG" ] || continue
+  grep -q 'id="AndroidAdvancedSources"' "$SCCFG" || continue
+  if grep -q 'id="AdvancedProtection"' "$SCCFG"; then
+    SCCFG_N=$((SCCFG_N+1)); continue
+  fi
+  python3 - "$SCCFG" <<'PY'
+import sys, xml.etree.ElementTree as ET
+p = sys.argv[1]
+s = open(p).read()
+anchor = '''        <safety-sources-group
+            id="AndroidAdvancedSources"'''
+if anchor not in s:
+    sys.exit("anchor not found in " + p)
+entry = '''            <!-- Declared so GMS's Advanced Protection push is accepted instead of throwing
+                 "Unexpected safety source" and force-closing Play services. Hidden and string-free:
+                 the entry only appears if GMS supplies data, and then uses GMS's own title/summary. -->
+            <dynamic-safety-source
+                id="AdvancedProtection"
+                packageName="com.google.android.gms"
+                profile="all_profiles"
+                initialDisplayState="hidden"/>
+'''
+# insert as the first child of the AndroidAdvancedSources group
+i = s.index(anchor)
+j = s.index('>', s.index('title=', i)) + 1      # end of the group's opening tag
+out = s[:j] + '\n' + entry.rstrip('\n') + s[j:]
+ET.fromstring(out)                              # fail loudly rather than ship a broken config
+open(p, 'w').write(out)
+PY
+  if grep -q 'id="AdvancedProtection"' "$SCCFG"; then
+    SCCFG_N=$((SCCFG_N+1))
+  else
+    red "ERROR: AdvancedProtection source not inserted into $SCCFG"
+  fi
+done
+if [ "$SCCFG_N" -gt 0 ]; then
+  grn "fixup: GMS SafetyCenter AdvancedProtection source declared ($SCCFG_N config(s))"
+else
+  red "WARN: no safety_center_config.xml patched — GMS SafetyCenter FC not fixed"
+fi
+
+# 25) QTI SERVICETRACKER LOG FLOOD (2026-07-20): system_server floods the log every boot —
+#     ~5,555x `avc: denied { find } vendor.qti.hardware.servicetracker::IServicetracker` (HIDL) plus
+#     the AIDL variant, each denial ALSO surfacing as a SecurityException from ServiceManager.
+#     ROOT CAUSE: AOSPA carries QTI patches in ActiveServices.java that report every service
+#     lifecycle event to Qualcomm's Servicetracker HAL. That HAL does not exist on MediaTek, and
+#     `getServicetrackerInstance()` re-probes it on EVERY service event, because the probe leaves
+#     `mServicetracker` null and there is no "already tried" state. The AIDL path is already latched
+#     (mIsAIDLSupported, set once from ServiceManager.isDeclared in the constructor); the HIDL path
+#     is not — hence thousands of lookups per boot.
+#     NOTE the earlier sepolicy work (step 16, quiet_qcom_ghosts) only DONTAUDITs the denials: a
+#     denied `find` still returns EX_SECURITY from servicemanager (ServiceManager.cpp canFindService),
+#     so the SecurityException kept being thrown and logged. dontaudit silences the kernel avc line,
+#     not the exception. This step removes the lookups themselves, which is the actual fix; the
+#     dontaudit rules stay as belt-and-suspenders.
+#     FIX: latch "not present" so each interface is probed at most once per boot. Purely a
+#     log/CPU-noise fix — behaviour is unchanged on a device that HAS the HAL (first probe succeeds
+#     and the latch never trips); on this device the HAL can never appear, so latching is safe.
+#     frameworks/base .java change => services.jar rebuild, NO soong re-analysis.
+AS="$TOP/frameworks/base/services/core/java/com/android/server/am/ActiveServices.java"
+if [ -f "$AS" ] && ! grep -q 'sServicetrackerUnavailable' "$AS"; then
+  python3 - "$AS" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+orig = s
+
+# 1) latch fields, declared next to the two HAL handles
+fld_anchor = ("    private vendor.qti.hardware.servicetracker.V1_0.IServicetracker mServicetracker;\n"
+              "    private vendor.qti.hardware.servicetrackeraidl.IServicetracker  mServicetracker_aidl;\n")
+fld_new = fld_anchor + (
+    "    // S666LN: the QTI Servicetracker HAL does not exist on MediaTek. Probe each interface at\n"
+    "    // most once instead of on every service lifecycle event (thousands of denied lookups and\n"
+    "    // SecurityExceptions per boot otherwise).\n"
+    "    private static boolean sServicetrackerUnavailable = false;\n"
+    "    private static boolean sServicetrackerAidlUnavailable = false;\n")
+assert fld_anchor in s, "servicetracker field anchor not found"
+s = s.replace(fld_anchor, fld_new, 1)
+
+# 2) HIDL getter: early-out on the latch, and set it when the interface comes back absent
+hidl_old = ("    private boolean getServicetrackerInstance() {\n"
+            "        if (mServicetracker == null ) {\n")
+hidl_new = ("    private boolean getServicetrackerInstance() {\n"
+            "        if (sServicetrackerUnavailable) return false;\n"
+            "        if (mServicetracker == null ) {\n")
+assert hidl_old in s, "HIDL getter anchor not found"
+s = s.replace(hidl_old, hidl_new, 1)
+
+hidl_null_old = ("            if (mServicetracker == null) {\n"
+                 "                if (DEBUG_SERVICE) Slog.w(TAG, \"servicetracker HIDL not available\");\n"
+                 "                return false;\n"
+                 "            }\n")
+hidl_null_new = ("            if (mServicetracker == null) {\n"
+                 "                if (DEBUG_SERVICE) Slog.w(TAG, \"servicetracker HIDL not available\");\n"
+                 "                sServicetrackerUnavailable = true;\n"
+                 "                return false;\n"
+                 "            }\n")
+assert hidl_null_old in s, "HIDL null-check anchor not found"
+s = s.replace(hidl_null_old, hidl_null_new, 1)
+
+# 3) AIDL getter: same treatment (mIsAIDLSupported already gates it, but latch the lookup too)
+aidl_old = "        if (!mIsAIDLSupported) return false;\n"
+aidl_new = "        if (!mIsAIDLSupported || sServicetrackerAidlUnavailable) return false;\n"
+assert aidl_old in s, "AIDL gate anchor not found"
+s = s.replace(aidl_old, aidl_new, 1)
+
+aidl_null_old = ("            if (mServicetracker_aidl == null) {\n"
+                 "                if (DEBUG_SERVICE) Slog.w(TAG, \"servicetracker AIDL not available\");\n"
+                 "                return false;\n"
+                 "            }\n")
+aidl_null_new = ("            if (mServicetracker_aidl == null) {\n"
+                 "                if (DEBUG_SERVICE) Slog.w(TAG, \"servicetracker AIDL not available\");\n"
+                 "                sServicetrackerAidlUnavailable = true;\n"
+                 "                return false;\n"
+                 "            }\n")
+assert aidl_null_old in s, "AIDL null-check anchor not found"
+s = s.replace(aidl_null_old, aidl_null_new, 1)
+
+assert s != orig
+open(p, "w").write(s)
+PY
+  if grep -q 'sServicetrackerUnavailable' "$AS"; then
+    grn "fixup: QTI servicetracker probes latched (kills the per-boot denial/SecurityException flood)"
+  else
+    red "ERROR: servicetracker latch did not apply"
+  fi
+else
+  grn "fixup: QTI servicetracker probe latch already handled (skip)"
+fi

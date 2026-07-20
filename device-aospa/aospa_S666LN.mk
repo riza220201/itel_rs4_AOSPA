@@ -60,21 +60,16 @@ PRODUCT_GMS_CLIENTID_BASE := android-transsion
 PRODUCT_SYSTEM_NAME := S666LN-OP
 PRODUCT_SYSTEM_DEVICE := S666LN
 
-PRODUCT_BUILD_PROP_OVERRIDES += \
-    BuildDesc="sys_tssi_64_armv82_itel-user 13 TP1A.220624.014 974711 release-keys" \
-    BuildFingerprint=Itel/S666LN-OP/itel-S666LN:13/TP1A.220624.014/251212V1661:user/release-keys \
-    DeviceName=$(PRODUCT_SYSTEM_DEVICE) \
-    DeviceProduct=$(PRODUCT_SYSTEM_NAME)
-
-# Play Integrity / fingerprint validity (2026-07-18): the BuildFingerprint override above only sets
-# the PER-PARTITION fingerprints (ro.system/vendor/product.build.fingerprint). The PRIMARY
-# ro.build.fingerprint — the one Build.FINGERPRINT and Play Integrity read — is not written to
-# build.prop, so init derives it at runtime from the live props (brand/name/device : release / id /
-# incremental : type / tags) → an invalid "…:16/BQ2A…:userdebug/test-keys" string. Set it
-# explicitly to the stock certified value so init skips the derive (it only derives when unset).
-# VERIFY on the next build: `adb shell getprop ro.build.fingerprint` must equal the stock string.
-PRODUCT_SYSTEM_PROPERTIES += \
-    ro.build.fingerprint=Itel/S666LN-OP/itel-S666LN:13/TP1A.220624.014/251212V1661:user/release-keys
+# HONEST fingerprint (2026-07-20): we deliberately DO NOT spoof the fingerprint to the stock Android-13
+# certified string. ro.build.fingerprint + the per-partition fingerprints derive truthfully from the real
+# build -> Itel/.../S666LN:16/<AOSPA build id>/...:user/dev-keys (version AND tags now match reality;
+# internally consistent). WHY: the previous A13-fingerprint-on-A16-OS mismatch is the leading suspect for
+# strict Play-Integrity token validators (Privy e-KYC liveness inside BRImo) rejecting the device, even
+# though banking login / by.U / Play Protect "certified" all accepted the A13 spoof. The working RS4
+# LineageOS ports pass Privy, so on this device either an honest fingerprint + hardware attestation
+# carries Play-Integrity DEVICE, or they spoof a CONSISTENT A16 cert. TRADEOFF UNDER TEST: Play Protect
+# may now read "uncertified" -> re-verify banking + by.U + BRImo face-verify; if banking regresses, fall
+# back to a consistent A16 certified fingerprint instead of the A13 one.
 
 # Bootanimation resolution (720 x 1612 panel)
 TARGET_BOOT_ANIMATION_RES := 720

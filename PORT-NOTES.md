@@ -197,3 +197,177 @@ integrity checker should then show a VALID fingerprint.
   STRONG needs the root+keybox route and is a separate, optional decision.
 - For a proper release, also consider building the **user** variant + **release-key** signing so
   `ro.build.type`/`ro.build.tags` stop reading `userdebug`/`test-keys` (some checkers flag those too).
+
+---
+
+## ✅ Camera RAW / DNG without root (2026-07-20 — apply-overlays.sh step 23)
+
+The RS4's camera hardware supports RAW, but the stock MediaTek HAL blobs don't advertise RAW
+capability to Camera2, so on AOSP-based ROMs no app can shoot DNG. The community workaround is the
+**`Itel_RS4_RAW_v2` Magisk module**, which overlays two camera-HAL libraries at `/vendor/lib64/`.
+That fixes it only for rooted users — and this ROM ships rootless by design.
+
+**Fix: stage the same two libraries into the vendor tree** so every user gets RAW with no root:
+
+| lib | installed to |
+|---|---|
+| `libmtkcam_3rdparty.customer.so` | `/vendor/lib64/mt6789/` |
+| `libmtkcam_metastore.so` | `/vendor/lib64/mt6789/` |
+
+Note the path: the Magisk module drops its copies in `/vendor/lib64/`, where they only take effect by
+shadowing the linker search path. The vendor tree installs these libs to `/vendor/lib64/mt6789/`
+(`relative_install_path: "mt6789"` in `vendor/itel/S666LN/Android.bp`), which is the canonical
+location the HAL loads them from — so replacing them there is both simpler and more robust.
+
+**Drop-in safety — verified against the stock blobs before staging:**
+- Identical `SONAME` and identical `DT_NEEDED` lists (16 and 35 entries), and identical exported
+  symbol sets (706 dynamic symbols, none added or removed). So soong's `check_elf_file` passes with
+  the existing `cc_prebuilt_library_shared` definitions unchanged — no `Android.bp` edit needed.
+- `libmtkcam_3rdparty.customer.so` is the **same binary** as stock (identical GNU build ID) with a
+  **10-byte** `.text` patch: one `b.ne` at file offset `+0x34ef4` replaced by `NOP`, plus two
+  immediates changed (`mov w9,#8 / mov w8,#3` → `mov w9,#1 / mov w8,#17`).
+- `libmtkcam_metastore.so` is a **different build of the same library** (build ID differs, ~66% of
+  `.text` differs, but file and section sizes are identical — the same functions emitted in a
+  different order). Its compiled-in image-sensor metadata set is **identical** to stock: the same 75
+  `imgsensor_metadata/*` sensor configurations, same names, no additions or removals.
+
+**No app change is needed.** Aperture already implements DNG capture
+(`ImageCapture.OUTPUT_FORMAT_RAW` / `OUTPUT_FORMAT_RAW_JPEG`, MIME `image/x-adobe-dng`, with an
+`enableRawImageCapture` preference), so the RAW option surfaces in the camera app as soon as the HAL
+advertises the capability.
+
+**Build cost:** blob-only change ⇒ kati + image packaging re-run, **no soong re-analysis**.
+
+**Obtaining the blobs:** not redistributed in this repo (proprietary MediaTek code, same policy as
+`blobs32/` and the fenrir LK). Extract `system/vendor/lib64/*.so` from the `Itel_RS4_RAW_v2` module
+into `blobs-camera-raw/`; `apply-overlays.sh` step 23 stages them and keeps the stock originals as
+`*.so.stock` next to the replaced files (restore those to revert).
+
+**On-device verification after flashing:**
+- `adb shell dumpsys media.camera | grep -i -A2 "REQUEST_AVAILABLE_CAPABILITIES"` should list RAW.
+- Aperture → settings should offer the RAW/DNG photo format, and a capture should produce a `.dng`.
+- Regression-check the normal path too: rear + front stills, video, and the fingerprint-unlock
+  camera-free paths should be unaffected.
+
+---
+
+## ✅ GMS SafetyCenter force-close (2026-07-20 — apply-overlays.sh step 24)
+
+The one bug advertised as a known issue in the v2 release notes. `com.google.android.gms` force-closes
+on every boot with:
+
+```
+IllegalArgumentException: Unexpected safety source: AdvancedProtection
+```
+
+**Root cause.** This build ships the **AOSP** mainline Permission module (`com.android.permission`),
+whose SafetyCenter config declares only AOSP safety sources. GMS ships and expects **Google's**
+variant of that module, whose config additionally declares the Android-16 "Advanced Protection"
+source. GMS calls `SafetyCenterManager.setSafetySourceData("AdvancedProtection", …)`;
+`SafetySourceDataValidator.validateRequest()` looks the id up in the config, gets `null`, and throws
+(`SafetySourceDataValidator.java:85`). Nothing on the device is actually broken — but GMS crashes.
+
+**Fix.** Declare the source so the call is accepted, in
+`packages/modules/Permission/SafetyCenter/Resources/res/raw*/safety_center_config.xml`:
+
+```xml
+<dynamic-safety-source
+    id="AdvancedProtection"
+    packageName="com.google.android.gms"
+    profile="all_profiles"
+    initialDisplayState="hidden"/>
+```
+
+Deliberately minimal, and every attribute choice is forced by `SafetySource.Builder.build()`:
+- `initialDisplayState="hidden"` ⇒ `titleRequired` is `isDynamicNotHidden || isDynamicHiddenWithSearch
+  || isStatic`, all false, so **title, summary and intentAction are all not required** — no new string
+  resources, and the UI is unchanged.
+- When GMS does push data, `SafetySourceStatus.Builder` requires non-null title and summary, so the
+  rendered entry takes its text from GMS rather than the config.
+- `maxSeverityLevel` omitted ⇒ defaults to `Integer.MAX_VALUE`, so GMS cannot trip the "exceeds max
+  severity" throw either.
+- Placed in `AndroidAdvancedSources`, which is **stateful** (no `statelessIconType`); a stateless
+  group throws if a source reports any severity above `UNSPECIFIED`.
+- `profile="all_profiles"` is the permissive choice — `primary_profile_only` would throw
+  "Unexpected profile type" if GMS ever pushed for a work or private profile.
+
+The step patches every `raw*/safety_center_config.xml` that has the `AndroidAdvancedSources` group,
+validates the result with ElementTree before writing, and is idempotent. Modifying an existing
+resource file (rather than adding one to a glob) keeps the rebuild **ninja-incremental**.
+
+## ✅ QTI servicetracker log flood (2026-07-20 — apply-overlays.sh step 25)
+
+`system_server` floods the log every boot: ~5,555× `avc: denied { find }
+vendor.qti.hardware.servicetracker::IServicetracker` (HIDL) plus the AIDL variant, and **each denial
+also surfaces as a SecurityException**.
+
+**Root cause.** AOSPA carries QTI patches in `ActiveServices.java` that report every service lifecycle
+event to Qualcomm's Servicetracker HAL, which does not exist on MediaTek.
+`getServicetrackerInstance()` re-probes it on **every service event**, because a failed probe leaves
+`mServicetracker` null and there is no "already tried" state. The AIDL path is already latched
+(`mIsAIDLSupported`, set once from `ServiceManager.isDeclared` in the constructor); the HIDL path is
+not — hence thousands of lookups per boot.
+
+**Why the earlier sepolicy work wasn't enough.** Step 16 (`quiet_qcom_ghosts`) only `dontaudit`s the
+denials. A denied `find` still returns `EX_SECURITY` from servicemanager
+(`ServiceManager.cpp::canFindService`), so the SecurityException kept being thrown and logged —
+`dontaudit` silences the kernel avc line, not the exception. Removing the lookups is the actual fix;
+the `dontaudit` rules stay as belt-and-suspenders.
+
+**Fix.** Latch "not present" (`sServicetrackerUnavailable` / `sServicetrackerAidlUnavailable`) so each
+interface is probed at most once per boot. Behaviour is unchanged on a device that *has* the HAL (the
+first probe succeeds and the latch never trips); on this device it can never appear. Log/CPU noise
+only — but it makes future logcat diagnosis dramatically easier.
+
+## 🔎 MTK GPS `GET_RTC_FAIL` spam (cosmetic — not fixed, deliberately)
+
+`mnld` logs `MTK_GPS_MSG_FIX_READY,GET_RTC_FAIL` at roughly 1 Hz while GNSS is active. The string and
+the `mtk_gps_get_rtc_info` symbol live **inside the proprietary `/vendor/bin/mnld` binary**, and the
+message fires on `FIX_READY` — i.e. fixes are being produced, only the RTC-info side call fails. No
+source to fix, and patching a blob blind is not worth it for a log line. Confirm GPS lock works
+outdoors; if it does, this is pure noise.
+
+---
+
+## ✅ `dev-keys` → `release-keys`: the post-build signing step (2026-07-20 — `sign-release.sh`)
+
+**Field bug report:** on the released honest build, the Duckdetector app still flags the device
+because the fingerprint and `ro.build.tags` read **`dev-keys`**.
+
+**This is not a bug in our signing — it is a step we never ran.** `build/make/core/config.mk` spells
+it out:
+
+> The "test-keys" tag marks builds signed with the old test keys, which are available in the SDK.
+> "dev-keys" marks builds signed with non-default dev keys (usually private keys from a vendor
+> directory). **Both of these tags will be removed and replaced with "release-keys" when the
+> target-files is signed in a post-build step.**
+
+So in-tree `PRODUCT_DEFAULT_DEV_CERTIFICATE` signing can only ever produce `dev-keys`, no matter how
+private the key is. `release-keys` comes exclusively from `sign_target_files_apks`.
+
+**Fix:** `./sign-release.sh [version-tag]`, run after a build that included `otapackage`. It runs the
+real release flow on the target-files and regenerates the OTA (plus fastboot images and super) from
+the signed result.
+
+What the signing pass changes (verified by reading `sign_target_files_apks.py`, not assumed):
+- `OPTIONS.tag_changes` defaults to `("-test-keys", "-dev-keys", "+release-keys")` (line 217).
+- `RewriteProps()` rewrites, across **every** partition: all `ro.*.build.tags`; the trailing key field
+  of all `ro.*.build.fingerprint` / `.build.thumbprint` and `ro.bootimage.build.fingerprint`; the last
+  token of `ro.build.description`; and strips the `-keys` suffix from `ro.build.display.id`. Because
+  it walks every prop file, all partitions flip together — this cannot reproduce the honest3-class bug
+  where `vendor/build.prop` lagged behind the others.
+
+**AVB is deliberately untouched.** `sign-release.sh` passes **no** `--avb_*_key` flags.
+`OPTIONS.avb_keys` defaults to `{}` and `ReplaceAvbPartitionSigningKey()` returns early for any
+partition without a key, so the AVB chain stays byte-identical and the device keeps
+`verifiedbootstate=green` under the fenrir LK. **Do not add AVB flags to this script** without
+re-reading the 2026-07-19 journal decision ("AVB keys deliberately UNCHANGED") — re-keying AVB risks
+the green state that Play Integrity leans on, for no gain.
+
+**This remains honest.** We genuinely sign with our own private release keys; `release-keys` is what
+that state is called once the standard release process has been run. Unlike the retired A13
+fingerprint spoof, nothing false is asserted.
+
+**Fallback (second choice, not used):** patch the `BUILD_KEYS` branch in `config.mk` so our key
+directory yields `release-keys` directly. One line and consistent by construction, but it needs a
+full rebuild and would hit the known `vendor/build.prop` BUILD_NUMBER staleness trap.

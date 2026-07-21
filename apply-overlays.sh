@@ -735,3 +735,103 @@ PY
 else
   grn "fixup: QTI servicetracker probe latch already handled (skip)"
 fi
+
+# 26) NTSYNC ROM SEPOLICY (2026-07-21): the Riza kernel v4 provides /dev/ntsync (in-kernel NT sync
+#     primitives for Winlator/Wine). The kernel gives the node; the ROM must LABEL it + let the
+#     emulator's app domain (untrusted_app) open+ioctl it — otherwise SELinux (Enforcing) blocks it.
+#     For ROOTED users the kernel ships a Magisk/KSU module (ntsync-selinux) that injects this at
+#     runtime (bypassing neverallow); the NON-ROOT vanilla ROM must bake the equivalent into the
+#     built policy instead. Build-clean because: (a) ntsync_device is a fresh dev_type with an
+#     explicit allow — the ONLY dev_type neverallow for apps is on blk_file, and the app chr_file
+#     bans are type-specific (nfc/tee/tun/kmsg/…), none of which is ntsync_device; (b) it follows the
+#     exact pattern AOSP uses for gpu_device (app.te: allow appdomain gpu_device:chr_file). Winlator
+#     runs as untrusted_app, so untrusted_app_all (untrusted_app + every versioned untrusted_app_<sdk>)
+#     covers it version-proof. file_contexts labels the node at creation (no runtime chcon needed).
+#     sepolicy .te/file_contexts change -> policy rebuild, NO soong re-analysis.
+#     See the kernel v4 release notes + JOURNAL 2026-07-21.
+NTSYNC_TE="$DEV/sepolicy/vendor/ntsync.te"
+if [ ! -f "$NTSYNC_TE" ] || ! grep -q "ntsync_device" "$NTSYNC_TE"; then
+  cat > "$NTSYNC_TE" <<'EOF'
+# ntsync (Riza kernel v4+): /dev/ntsync = in-kernel NT synchronization primitives for Winlator/Wine.
+# Kernel provides the node (CONFIG_NTSYNC); this labels it + lets the emulator app domain use it.
+# untrusted_app_all covers untrusted_app + every versioned untrusted_app_<sdk> (Winlator = untrusted_app).
+# Same shape as AOSP's app access to gpu_device; ntsync's API is ioctl-based (open/getattr for fd setup).
+type ntsync_device, dev_type;
+allow untrusted_app_all ntsync_device:chr_file { open read write ioctl getattr };
+EOF
+  grn "fixup: ntsync sepolicy ntsync.te created (type ntsync_device + untrusted_app allow)"
+else
+  grn "fixup: ntsync.te already present (skip)"
+fi
+NTSYNC_FC="$DEV/sepolicy/vendor/file_contexts"
+if [ -f "$NTSYNC_FC" ] && ! grep -q "/dev/ntsync" "$NTSYNC_FC"; then
+  printf '/dev/ntsync    u:object_r:ntsync_device:s0\n' >> "$NTSYNC_FC"
+  grn "fixup: /dev/ntsync labeled ntsync_device in file_contexts"
+else
+  grn "fixup: /dev/ntsync file_contexts label already present (skip)"
+fi
+
+# 27) COSMETIC LOG SUPPRESSION (2026-07-21): silence PURELY-cosmetic proprietary-blob log tags at logd
+#     level (persist.log.tag.<TAG>=S) — the same house method already used in vendor_logtag.mk. Only tags
+#     confirmed cosmetic + blob-internal (no source) are silenced; NEVER blanket-silence tags that can
+#     carry real errors (HWComposer/bluetooth/ServiceManager left audible). See JOURNAL 2026-07-21 triage.
+VP="$TOP/device/itel/S666LN/configs/properties/vendor.prop"
+if [ -f "$VP" ] && ! grep -q "persist.log.tag.VoLTE=S" "$VP"; then
+  cat >> "$VP" <<'EOF'
+
+# Silence cosmetic blob log spam (no source; confirmed non-functional). JOURNAL 2026-07-21.
+persist.log.tag.VoLTE=S
+persist.log.tag.TRS=S
+persist.log.tag.flp=S
+persist.log.tag.SatelliteController=S
+persist.log.tag.BoostFramework=S
+EOF
+  grn "fixup: cosmetic log tags silenced in vendor.prop (VoLTE/TRS/flp/Satellite/Boost)"
+else
+  grn "fixup: cosmetic log-tag suppression already present (skip)"
+fi
+
+# 28) ADPF AdpfConfig (2026-07-21): powerhint.json lacked an AdpfConfig block, so the pixel-libperfmgr
+#     HAL rejected PowerHintSession ("PowerHintSessions are not supported"). Add the canonical ADPF_DEFAULT
+#     block (all ADPF_PARSE-required fields, standard Pixel values) to enable adaptive frame-pacing hints.
+#     SAFE: HintManager::ParseAdpfConfigs clears+returns empty on any bad/missing required field, and an
+#     empty AdpfConfig is handled as "no ADPF section" (LOG INFO) — the power HAL still loads its
+#     Nodes/Actions. So a wrong value degrades to today's behaviour, it does not break the HAL. On-device
+#     validate after flashing. See HintManager.cc ParseAdpfConfigs + JOURNAL 2026-07-21.
+PHJ="$TOP/device/itel/S666LN/configs/power/powerhint.json"
+if [ -f "$PHJ" ] && ! grep -q "AdpfConfig" "$PHJ"; then
+  python3 - "$PHJ" <<'PY'
+import sys, json, collections
+p = sys.argv[1]
+d = json.load(open(p), object_pairs_hook=collections.OrderedDict)
+d["AdpfConfig"] = [collections.OrderedDict([
+    ("Name","ADPF_DEFAULT"),
+    ("PID_On",True),("PID_Po",5.0),("PID_Pu",3.0),("PID_I",0.001),
+    ("PID_I_Init",200),("PID_I_High",512),("PID_I_Low",-120),
+    ("PID_Do",500.0),("PID_Du",0.0),
+    ("UclampMin_On",True),("UclampMin_Init",200),
+    ("UclampMin_High",480),("UclampMin_Low",0),
+    ("SamplingWindow_P",1),("SamplingWindow_I",0),("SamplingWindow_D",1),
+    ("StaleTimeFactor",10.0),("ReportingRateLimitNs",166666660),("TargetTimeFactor",1.0),
+])]
+json.dump(d, open(p,"w"), indent=4)
+open(p,"a").write("\n")
+PY
+  grep -q "ADPF_DEFAULT" "$PHJ" && grn "fixup: ADPF_DEFAULT AdpfConfig added to powerhint.json" || red "ERROR: AdpfConfig insert failed"
+else
+  grn "fixup: powerhint.json AdpfConfig already present (skip)"
+fi
+
+# 29) TEE per-boot crash (2026-07-21): trustonic.rc launches mcDriverDaemon with --sfs-reformat
+#     UNCONDITIONALLY -> the reformat instance SIGABRTs on SecureWorld::stop() every boot (then respawns).
+#     /mnt/vendor/persist is a real persistent ext4 mount, so a per-boot reformat isn't needed. Drop the
+#     flag. TESTABLE-RISK: if the SFS actually needs (re)format, keystore/DRM could regress -> VERIFY
+#     keystore + Widevine + fingerprint after flashing; if broken, revert (the .orig backup). See JOURNAL.
+TRC="$TOP/vendor/itel/S666LN/proprietary/vendor/etc/init/trustonic.rc"
+if [ -f "$TRC" ] && grep -q -- "--sfs-reformat" "$TRC"; then
+  [ -f "$TRC.sfsreformat.orig" ] || cp -f "$TRC" "$TRC.sfsreformat.orig"
+  sed -i 's/ --sfs-reformat//' "$TRC"
+  grep -q -- "--sfs-reformat" "$TRC" && red "ERROR: --sfs-reformat still present" || grn "fixup: dropped --sfs-reformat from trustonic.rc (stops per-boot TEE crash; VERIFY keystore/DRM)"
+else
+  grn "fixup: trustonic.rc --sfs-reformat already dropped/absent (skip)"
+fi

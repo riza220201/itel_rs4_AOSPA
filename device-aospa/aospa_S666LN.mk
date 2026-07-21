@@ -60,16 +60,28 @@ PRODUCT_GMS_CLIENTID_BASE := android-transsion
 PRODUCT_SYSTEM_NAME := S666LN-OP
 PRODUCT_SYSTEM_DEVICE := S666LN
 
-# HONEST fingerprint (2026-07-20): we deliberately DO NOT spoof the fingerprint to the stock Android-13
-# certified string. ro.build.fingerprint + the per-partition fingerprints derive truthfully from the real
-# build -> Itel/.../S666LN:16/<AOSPA build id>/...:user/dev-keys (version AND tags now match reality;
-# internally consistent). WHY: the previous A13-fingerprint-on-A16-OS mismatch is the leading suspect for
-# strict Play-Integrity token validators (Privy e-KYC liveness inside BRImo) rejecting the device, even
-# though banking login / by.U / Play Protect "certified" all accepted the A13 spoof. The working RS4
-# LineageOS ports pass Privy, so on this device either an honest fingerprint + hardware attestation
-# carries Play-Integrity DEVICE, or they spoof a CONSISTENT A16 cert. TRADEOFF UNDER TEST: Play Protect
-# may now read "uncertified" -> re-verify banking + by.U + BRImo face-verify; if banking regresses, fall
-# back to a consistent A16 certified fingerprint instead of the A13 one.
+# STOCK CERTIFIED FINGERPRINT (2026-07-21): spoof to the stock itel-RS4 Android-13 certified string.
+# HISTORY / WHY WE ARE BACK HERE: the "honest" A16 fingerprint (shipped briefly, then cancelled) made the
+# device FAIL Play Integrity — it did not pass even BASIC integrity ("device invalid"), because Google's
+# attestation DB does not recognise a custom-ROM A16 fingerprint. The stock A13 string IS recognised as
+# certified, so it passes DEVICE integrity. This is the deciding factor for banking/by.U on this device.
+#   * The A13-on-A16 "inconsistency" worry (the reason honest was tried) turned out NOT to be the fix:
+#     honest broke integrity outright. So the stock spoof is required.
+#   * The SEPARATE "dev-keys" detection problem (Duckdetector) is fixed by the release-keys SIGNING pass
+#     (sign-release.sh / sign_target_files_apks), NOT by the fingerprint — so we get BOTH: stock spoof
+#     carries integrity, release-keys signing clears the dev-keys flag. They are orthogonal.
+#   * BuildFingerprint/BuildDesc set the per-partition fingerprints; ro.build.fingerprint (the primary
+#     one Play Integrity reads) is set explicitly because init only derives it when unset. All end in
+#     ':user/release-keys' — consistent with the release-keys signing (sign_target_files rewrites the key
+#     suffix to release-keys, a no-op here). AVB/verified-boot chain unchanged (green under fenrir).
+PRODUCT_BUILD_PROP_OVERRIDES += \
+    BuildDesc="sys_tssi_64_armv82_itel-user 13 TP1A.220624.014 974711 release-keys" \
+    BuildFingerprint=Itel/S666LN-OP/itel-S666LN:13/TP1A.220624.014/251212V1661:user/release-keys \
+    DeviceName=$(PRODUCT_SYSTEM_DEVICE) \
+    DeviceProduct=$(PRODUCT_SYSTEM_NAME)
+
+PRODUCT_SYSTEM_PROPERTIES += \
+    ro.build.fingerprint=Itel/S666LN-OP/itel-S666LN:13/TP1A.220624.014/251212V1661:user/release-keys
 
 # Bootanimation resolution (720 x 1612 panel)
 TARGET_BOOT_ANIMATION_RES := 720

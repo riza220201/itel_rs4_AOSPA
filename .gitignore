@@ -48,3 +48,10 @@ RESUME-THIS.md
 
 # USB-gadget flap logcat evidence for the v4 bug (local reference).
 usb-flap-evidence.log
+
+# Local kernel rollback backups (the active kernel is kernel-stage/Image.gz; prior versions
+# live in git history — no need to track redundant on-disk copies).
+kernel-stage/Image.gz.*-bak
+
+# Build helper log outputs (already covered by *.log, listed for clarity).
+build-*.log

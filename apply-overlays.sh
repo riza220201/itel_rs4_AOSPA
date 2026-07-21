@@ -822,16 +822,21 @@ else
   grn "fixup: powerhint.json AdpfConfig already present (skip)"
 fi
 
-# 29) TEE per-boot crash (2026-07-21): trustonic.rc launches mcDriverDaemon with --sfs-reformat
-#     UNCONDITIONALLY -> the reformat instance SIGABRTs on SecureWorld::stop() every boot (then respawns).
-#     /mnt/vendor/persist is a real persistent ext4 mount, so a per-boot reformat isn't needed. Drop the
-#     flag. TESTABLE-RISK: if the SFS actually needs (re)format, keystore/DRM could regress -> VERIFY
-#     keystore + Widevine + fingerprint after flashing; if broken, revert (the .orig backup). See JOURNAL.
+# 29) TEE trustonic.rc — KEEP --sfs-reformat. (REVERTED 2026-07-21.)
+#     History: we briefly dropped --sfs-reformat to stop a COSMETIC per-boot mcDriverDaemon SIGABRT on
+#     SecureWorld::stop() (it respawned fine, zero functional impact). That was a BAD trade: on a fresh
+#     flash + factory reset the flag is LOAD-BEARING — it (re)initialises the Trustonic Secure File
+#     System that Gatekeeper writes lock-screen credentials into. Without it, "Set PIN/pattern/password"
+#     fails with `IllegalStateException: Failed to enroll LSKF for new SP protector` (Gatekeeper enroll
+#     can't persist to the SFS). Every prior working release shipped WITH --sfs-reformat. So we keep it;
+#     the cosmetic per-boot respawn is the accepted cost. Ensure it's present (self-heal if a fresh
+#     vendor extract ever lacked it — the stock blob already has it).
 TRC="$TOP/vendor/itel/S666LN/proprietary/vendor/etc/init/trustonic.rc"
-if [ -f "$TRC" ] && grep -q -- "--sfs-reformat" "$TRC"; then
-  [ -f "$TRC.sfsreformat.orig" ] || cp -f "$TRC" "$TRC.sfsreformat.orig"
-  sed -i 's/ --sfs-reformat//' "$TRC"
-  grep -q -- "--sfs-reformat" "$TRC" && red "ERROR: --sfs-reformat still present" || grn "fixup: dropped --sfs-reformat from trustonic.rc (stops per-boot TEE crash; VERIFY keystore/DRM)"
-else
-  grn "fixup: trustonic.rc --sfs-reformat already dropped/absent (skip)"
+if [ -f "$TRC" ]; then
+  if grep -q -- "--sfs-reformat" "$TRC"; then
+    grn "fixup: trustonic.rc keeps --sfs-reformat (required for Gatekeeper lock-screen enroll)"
+  else
+    sed -i 's|mcDriverDaemon --P1|mcDriverDaemon --sfs-reformat --P1|' "$TRC"
+    grep -q -- "--sfs-reformat" "$TRC" && grn "fixup: restored --sfs-reformat to trustonic.rc" || red "ERROR: could not restore --sfs-reformat"
+  fi
 fi

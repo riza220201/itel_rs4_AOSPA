@@ -41,7 +41,7 @@ KEYS="$TOP/vendor/aospa-priv/keys"
 OUT="$TOP/out/target/product/$DEV"
 HOSTBIN="$TOP/out/host/linux-x86/bin"
 VTAG="${1:-v3}"
-DATE="$(date +%Y%m%d)"
+DATE="${DATE:-$(date +%Y%m%d)}"   # override to pin the artifact date to BUILD_NUMBER (e.g. across midnight)
 NAME="aospa-beryl-unofficial-${DEV}-${DATE}-${VTAG}"
 
 red() { printf '\033[0;31m%s\033[0m\n' "$*"; }
